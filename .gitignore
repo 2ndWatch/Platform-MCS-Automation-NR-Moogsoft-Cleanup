@@ -1,0 +1,6 @@
+venv
+.idea
+scratch.py
+__pycache__/
+*.xlsx
+*.json
