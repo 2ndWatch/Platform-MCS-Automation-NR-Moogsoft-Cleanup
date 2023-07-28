@@ -34,46 +34,9 @@ def get_destination_id(endpoint, headers, account_id, logger):
         for destination in destinations_list:
             if 'Platform' in destination['name']:
                 destination_id = destination['id']
+                logger.info(f'Platform API destination ID: {destination_id}')
 
     return destination_id
-
-
-def get_policy_workflow_ids():
-
-    # response['data']['actor']['account']['aiWorkflows']['workflows']['entities'] (list of workflow entities)
-    nrql_workflows_query = Template("""
-    {
-      actor {
-        user {
-          name
-        }
-        account(id: 2621186) {
-          aiWorkflows {
-            workflows {
-              entities {
-                id
-                name
-                destinationConfigurations {
-                  name
-                  type
-                  notificationTriggers
-                }
-                issuesFilter {
-                  predicates {
-                    attribute
-                    operator
-                    values
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    """)
-
-    return
 
 
 def create_channel(endpoint, headers, destination_id, account_id, logger):
@@ -125,13 +88,71 @@ def create_channel(endpoint, headers, destination_id, account_id, logger):
     return channel_id
 
 
-def create_workflow(endpoint, headers, account_id, channel_id, logger):
+def get_policy_ids(endpoint, headers, account_id, logger):
+    policy_ids_list = []
+
+    workflows_query = Template("""
+    {
+      actor {
+        account(id: $account_id) {
+          aiWorkflows {
+            workflows(filters: {destinationType: WEBHOOK}) {
+              entities {
+                id
+                name
+                destinationConfigurations {
+                  name
+                  type
+                  notificationTriggers
+                }
+                issuesFilter {
+                  predicates {
+                    attribute
+                    operator
+                    values
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """)
+
+    workflows_query_fmtd = workflows_query.substitute({'account_id': account_id})
+    nr_response = requests.post(endpoint,
+                                headers=headers,
+                                json={'query': workflows_query_fmtd}).json()
+
+    for workflow in nr_response['data']['actor']['account']['aiWorkflows']['workflows']['entities']:
+        goes_to_platform = False
+        for destination in workflow['destinationConfigurations']:
+            if 'Platform' in destination['name']:
+                logger.info(f'Workflow {workflow["name"]} is sending alerts to Platform.')
+                goes_to_platform = True
+
+            if goes_to_platform:
+                if workflow['issuesFilter']['predicates']:
+                    for predicate in workflow['issuesFilter']['predicates']:
+                        if predicate['attribute'] == 'labels.policyIds':
+                            values = predicate['values']
+                            for value in values:
+                                policy_ids_list.append(value)
+
+        # TODO: insert logic to determine if a workflow needs to be disabled
+        # TODO: have some way to separate out anything needing a manual check in case logic somehow misses
+
+    logger.info(f'Policy IDs sending alerts to Platform: {policy_ids_list}')
+
+    return policy_ids_list
+
+
+def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger):
     workflow_id = ''
 
-    # TODO: add policy_ids to parameters
-
     channel_id = json.dumps(channel_id)
-    test_policy_ids = json.dumps(['4569885'])
+    # test_policy_ids = json.dumps(['4569885'])
 
     nrql_create_workflow = Template("""
     mutation {
@@ -153,6 +174,13 @@ def create_workflow(endpoint, headers, account_id, channel_id, logger):
                 attribute: "labels.policyIds",
                 operator: EXACTLY_MATCHES,
                 values: $policy_ids_list
+              },
+              {
+                attribute: "priority",
+                operator: EQUAL,
+                values: [
+                  "CRITICAL"
+                ]
               }
             ]
           }
@@ -168,7 +196,7 @@ def create_workflow(endpoint, headers, account_id, channel_id, logger):
 
     create_workflow_fmtd = nrql_create_workflow.substitute({'account_id': account_id,
                                                             'channel_id': channel_id,
-                                                            'policy_ids_list': test_policy_ids})
+                                                            'policy_ids_list': policy_ids_list})
     nr_response = requests.post(endpoint,
                                 headers=headers,
                                 json={'query': create_workflow_fmtd}).json()
@@ -191,16 +219,16 @@ def create_catchall_workflow(client_name, account_id, logger):
 
     # get all destination IDs from an account and find the ID for '2W Platform API'
     destination_id = get_destination_id(endpoint, headers, account_id, logger)
-    logger.info(f'Platform API destination ID: {destination_id}')
 
     # TODO: create a new channel for '2W Platform API' destination
-    channel_id = create_channel(endpoint, headers, destination_id, account_id, logger)
-
-    # TODO: create a new workflow called 'MCS Platform' & associate policies
-    workflow_id = create_workflow(endpoint, headers, account_id, channel_id, logger)
+    # channel_id = create_channel(endpoint, headers, destination_id, account_id, logger)
 
     # TODO: get all workflows that currently use the '2W Platform API' webhook except any with 'Platform' in the name;
     #   return a list of policy IDs & list of workflow IDs
+    policy_ids_list = get_policy_ids(endpoint, headers, account_id, logger)
+
+    # TODO: create a new workflow called 'MCS Platform' & associate policies
+    # workflow_id = create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
 
     # TODO: disable appropriate policies
     # pass in workflow IDs
