@@ -34,7 +34,7 @@ def get_destination_id(endpoint, headers, account_id, logger):
         for destination in destinations_list:
             if 'Platform' in destination['name']:
                 destination_id = destination['id']
-                logger.info(f'Platform API destination ID: {destination_id}')
+                logger.info(f'Platform API destination ID: {destination_id}\n')
 
     return destination_id
 
@@ -88,15 +88,52 @@ def create_channel(endpoint, headers, destination_id, account_id, logger):
     return channel_id
 
 
-def get_policy_ids(endpoint, headers, account_id, logger):
-    policy_ids_list = []
+def get_policy_ids(endpoint, headers, client_name, account_id, logger):
+    workflow_count = 0
+    create_catchall = True
+    policy_ids_set = set()
+    workflow_ids_set = set()
+    workflows_to_check = []
+
+    non_critical_destinations = ['Moogsoft_Ingestion_QA_tf',
+                                 'Moogsoft_Ingestion_tf',
+                                 '2W Platform API',
+                                 'MCS Platform',
+                                 'mcs-tooling-nr-migration-test']
+
+    # If needed because we want to send all policy alerts to Platform, instead of only the ones that are currently
+    # sending alerts
+    # policies_query = Template("""
+    # {
+    #   actor {
+    #     account(id: $account_id) {
+    #       alerts {
+    #         policiesSearch {
+    #           policies {
+    #             id
+    #             name
+    #           }
+    #         }
+    #       }
+    #     }
+    #   }
+    # }
+    # """)
+    #
+    # policies_query_fmtd = policies_query.substitute({'account_id': account_id})
+    # policies_response = requests.post(endpoint,
+    #                                   headers=headers,
+    #                                   json={'query': policies_query_fmtd}).json()
+    #
+    # policies_count = len(policies_response['data']['actor']['account']['alerts']['policiesSearch']['policies'])
+    # logger.info(f'There are {policies_count} alert policies for this account.')
 
     workflows_query = Template("""
     {
       actor {
         account(id: $account_id) {
           aiWorkflows {
-            workflows(filters: {destinationType: WEBHOOK}) {
+            workflows {
               entities {
                 id
                 name
@@ -121,31 +158,66 @@ def get_policy_ids(endpoint, headers, account_id, logger):
     """)
 
     workflows_query_fmtd = workflows_query.substitute({'account_id': account_id})
-    nr_response = requests.post(endpoint,
-                                headers=headers,
-                                json={'query': workflows_query_fmtd}).json()
+    workflows_response = requests.post(endpoint,
+                                       headers=headers,
+                                       json={'query': workflows_query_fmtd}).json()
 
-    for workflow in nr_response['data']['actor']['account']['aiWorkflows']['workflows']['entities']:
+    for workflow in workflows_response['data']['actor']['account']['aiWorkflows']['workflows']['entities']:
+        workflow_count += 1
+        workflow_name = workflow['name']
         goes_to_platform = False
-        for destination in workflow['destinationConfigurations']:
-            if 'Platform' in destination['name']:
-                logger.info(f'Workflow {workflow["name"]} is sending alerts to Platform.')
-                goes_to_platform = True
+        destination_names = []
 
-            if goes_to_platform:
-                if workflow['issuesFilter']['predicates']:
-                    for predicate in workflow['issuesFilter']['predicates']:
-                        if predicate['attribute'] == 'labels.policyIds':
-                            values = predicate['values']
-                            for value in values:
-                                policy_ids_list.append(value)
+        if 'Platform' in workflow_name:
+            logger.warning('A Platform catchall workflow already exists for this account.')
+            create_catchall = False
+            continue
+        else:
+            for destination in workflow['destinationConfigurations']:
+                destination_name = destination['name']
+                destination_names.append(destination_name)
 
-        # TODO: insert logic to determine if a workflow needs to be disabled
-        # TODO: have some way to separate out anything needing a manual check in case logic somehow misses
+                if 'Platform' in destination_name:
+                    goes_to_platform = True
+                    if workflow['issuesFilter']['predicates']:
+                        for predicate in workflow['issuesFilter']['predicates']:
+                            if predicate['attribute'] == 'labels.policyIds':
+                                values = predicate['values']
+                                for value in values:
+                                    # Add to set of policy IDs to be added to catchall workflow
+                                    policy_ids_set.add(value)
 
-    logger.info(f'Policy IDs sending alerts to Platform: {policy_ids_list}')
+        # Evaluate whether workflow should be disabled
+        subtract = 0
+        for name in destination_names:
+            if name in non_critical_destinations or 'Moog' in name or 'moog' in name or 'OpsRamp' in name:
+                subtract += 1
+            else:
+                continue
 
-    return policy_ids_list
+        critical_destinations = len(destination_names) - subtract
+        if (goes_to_platform and critical_destinations == 0) or critical_destinations == 0:
+            logger.info(f'Workflow ({workflow_name}) can be safely disabled:\n   Goes to Platform? {goes_to_platform}'
+                        f'\n   Destination names: {destination_names}')
+            # Add to set of workflow IDs to be disabled after catchall creation
+            workflow_ids_set.add(workflow['id'])
+        else:
+            logger.info(f'Workflow ({workflow_name}) should be manually checked:\n   Goes to Platform? '
+                        f'{goes_to_platform}\n   Destination names: {destination_names}')
+            workflows_to_check.append(f'{client_name} {account_id}: {workflow_name}')
+
+    policy_ids_list = list(policy_ids_set)
+    workflow_ids_list = list(workflow_ids_set)
+    logger.info(f'\n{len(policy_ids_list)} policy IDs sending alerts to Platform: {policy_ids_list}')
+    logger.info(f'Create catchall for {client_name}? {create_catchall}')
+    logger.info(f'\nThere are {workflow_count} workflows:')
+    logger.info(f'   There are {len(workflow_ids_list)} workflows to disable: {workflow_ids_list}')
+    logger.info(f'   There are {len(workflows_to_check)} workflows to manually check:')
+    for wf in workflows_to_check:
+        logger.info(f'      {wf}')
+    logger.info('\n')
+
+    return policy_ids_list, create_catchall, workflow_ids_list, workflows_to_check
 
 
 def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger):
@@ -208,29 +280,3 @@ def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, 
         logger.warning(nr_response)
 
     return workflow_id
-
-
-def create_catchall_workflow(client_name, account_id, logger):
-    endpoint = 'https://api.newrelic.com/graphql'
-    headers = {
-        'Content-Type': 'application/json',
-        'API-Key': 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU',
-    }
-
-    # get all destination IDs from an account and find the ID for '2W Platform API'
-    destination_id = get_destination_id(endpoint, headers, account_id, logger)
-
-    # TODO: create a new channel for '2W Platform API' destination
-    # channel_id = create_channel(endpoint, headers, destination_id, account_id, logger)
-
-    # TODO: get all workflows that currently use the '2W Platform API' webhook except any with 'Platform' in the name;
-    #   return a list of policy IDs & list of workflow IDs
-    policy_ids_list = get_policy_ids(endpoint, headers, account_id, logger)
-
-    # TODO: create a new workflow called 'MCS Platform' & associate policies
-    # workflow_id = create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
-
-    # TODO: disable appropriate policies
-    # pass in workflow IDs
-
-    return 0

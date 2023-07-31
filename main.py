@@ -1,4 +1,5 @@
 from string import Template
+from datetime import datetime
 import workflow_report as wr
 import create_catchall as cc
 import logging
@@ -9,8 +10,9 @@ import openpyxl
 
 def initialize_logger():
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
+    logging.basicConfig(level=logging.INFO,
+                        filename=f'cleanup_{datetime.now().strftime("%Y-%m-%d_%H%M%S")}.log',
+                        filemode='a')
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     logger.addHandler(console)
@@ -42,7 +44,7 @@ def get_nr_account_ids(logger):
     nr_response = requests.post(nr_endpoint,
                                 headers=nr_headers,
                                 json={'query': accounts_query_fmtd}).json()
-    # logger.debug(f'New Relic API response:\n{nr_response}')
+    # logger.info(f'New Relic API response:\n{type(nr_response)}')
 
     return nr_response
 
@@ -67,6 +69,34 @@ def generate_report(accounts, logger):
     return
 
 
+def create_catchall_workflow(client_name, account_id, logger):
+    endpoint = 'https://api.newrelic.com/graphql'
+    headers = {
+        'Content-Type': 'application/json',
+        'API-Key': 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU',
+    }
+
+    # Get all destination IDs from an account and find the ID for '2W Platform API'
+    destination_id = cc.get_destination_id(endpoint, headers, account_id, logger)
+
+    # Create a new channel for '2W Platform API' destination
+    # channel_id = cc.create_channel(endpoint, headers, destination_id, account_id, logger)
+
+    # Get all workflows that currently use the '2W Platform API' webhook except any with 'Platform' in the name;
+    #   return a list of policy IDs & list of workflow IDs
+    policy_ids_list, create_catchall, workflow_ids_list, workflows_to_check = cc.get_policy_ids(endpoint, headers,
+                                                                                                client_name, account_id,
+                                                                                                logger)
+
+    # Create a new workflow called 'MCS Platform' & associate appropriate policies
+    # workflow_id = cc.create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
+
+    # TODO: disable appropriate policies
+    # pass in workflow IDs
+
+    return 0
+
+
 def do_the_things():
     logger = initialize_logger()
 
@@ -82,14 +112,23 @@ def do_the_things():
 
     # 2W-MCS-Development, 2W-MCS-Internal-IT, 2W-MCS-Sandboxes, 2W-MCS-SiriusPoint-AWS, 2W-MCS-Tooling-Test,
     # 2W-MCS-Sysco-Azure, 2W-MCS-Sysco-GCP, 2W-MCS-AutoNation, 2nd Watch Partner, 2W-MCS-Cargill-IT,
-    # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development
+    # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development, USPlateGlass
     account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3720977, 3563046, 3563050,
-                            2726097, 2563179, 2978097, 3589554, 2623152, 2824352]
+                            2726097, 2563179, 2978097, 3589554, 2623152, 2824352, 2726096]
 
-    account_id = 3498029
-    client_name = '2W-MCS-Tooling-Test'
-    logger.info(f'Creating catch-all workflow for {client_name} in NR account {account_id}...')
-    process_result = cc.create_catchall_workflow(client_name, account_id, logger)
+    accounts_list = accounts['data']['actor']['accounts']
+    # print(accounts_list)
+    accounts_sorted = sorted(accounts_list, key=lambda x: x['name'])
+    # print(accounts_sorted)
+
+    for account in accounts_sorted:
+        account_id = account['id']
+        client_name = account['name']
+        if account_id not in account_exclude_list:
+            logger.info(f'Processing {client_name} in NR account {account_id}...')
+            process_result = create_catchall_workflow(client_name, account_id, logger)
+        else:
+            logger.info(f'{client_name} in excluded accounts list; skipping account.\n')
 
 
 do_the_things()
