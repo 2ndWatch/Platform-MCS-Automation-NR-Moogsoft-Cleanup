@@ -50,7 +50,7 @@ def create_channel(endpoint, headers, destination_id, account_id, logger):
         mutation {
           aiNotificationsCreateChannel(accountId: $account_id, channel: {
             type: WEBHOOK,
-            name: "alex actual final test",
+            name: "MCS Platform",
             destinationId: $destination_id,
             product: IINT,
             properties: [
@@ -66,7 +66,6 @@ def create_channel(endpoint, headers, destination_id, account_id, logger):
           }) {
             channel {
               id
-              name
             }
           }
         }
@@ -81,7 +80,7 @@ def create_channel(endpoint, headers, destination_id, account_id, logger):
                                 json={'query': create_channel_fmtd}).json()
     try:
         channel_id = nr_response['data']['aiNotificationsCreateChannel']['channel']['id']
-        logger.info(f'Platform API orphan channel ID: {channel_id}')
+        logger.info(f'Platform API channel created. ID: {channel_id}\n')
     except KeyError:
         logger.warning(nr_response)
 
@@ -210,21 +209,21 @@ def get_policy_ids(endpoint, headers, client_name, account_id, logger):
     workflow_ids_list = list(workflow_ids_set)
     logger.info(f'\n{len(policy_ids_list)} policy IDs sending alerts to Platform: {policy_ids_list}')
     logger.info(f'Create catchall for {client_name}? {create_catchall}')
-    logger.info(f'\nThere are {workflow_count} workflows:')
-    logger.info(f'   There are {len(workflow_ids_list)} workflows to disable: {workflow_ids_list}')
-    logger.info(f'   There are {len(workflows_to_check)} workflows to manually check:')
-    for wf in workflows_to_check:
-        logger.info(f'      {wf}')
-    logger.info('\n')
+    if create_catchall:
+        logger.info(f'\nThere are {workflow_count} workflows:')
+        logger.info(f'   There are {len(workflow_ids_list)} workflows to disable: {workflow_ids_list}')
+        logger.info(f'   There are {len(workflows_to_check)} workflows to manually check:')
+        for wf in workflows_to_check:
+            logger.info(f'      {wf}')
 
     return policy_ids_list, create_catchall, workflow_ids_list, workflows_to_check
 
 
 def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger):
-    workflow_id = ''
 
     channel_id = json.dumps(channel_id)
     # test_policy_ids = json.dumps(['4569885'])
+    policy_ids_list = json.dumps(policy_ids_list)
 
     nrql_create_workflow = Template("""
     mutation {
@@ -236,7 +235,7 @@ def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, 
             notificationTriggers: [ACTIVATED, ACKNOWLEDGED, CLOSED]
           }, 
           mutingRulesHandling: DONT_NOTIFY_FULLY_MUTED_ISSUES, 
-          name: "alex test 3", 
+          name: "MCS Platform", 
           workflowEnabled: true, 
           destinationsEnabled: true,
           issuesFilter: {
@@ -275,8 +274,40 @@ def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, 
 
     try:
         workflow_id = nr_response['data']['aiWorkflowsCreateWorkflow']['workflow']['id']
-        logger.info(f'Platform API workflow ID: {workflow_id}')
+        logger.info(f'\nMCS Platform workflow successfully created. ID: {workflow_id}')
+        return 0
     except KeyError:
         logger.warning(nr_response)
+        return 1
 
-    return workflow_id
+
+def disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger):
+    logger.info(f'\nDisabling {len(workflow_ids_list)} existing workflows...')
+    nrql_disable_workflow = Template("""
+        mutation {
+          aiWorkflowsUpdateWorkflow(
+            accountId: $account_id
+            updateWorkflowData: {id: "$workflow_id", workflowEnabled: false}
+          ) {
+            workflow {
+              id
+            }
+          }
+        }
+        """)
+
+    for workflow_id in workflow_ids_list:
+        disable_workflow_fmtd = nrql_disable_workflow.substitute({'account_id': account_id,
+                                                                  'workflow_id': workflow_id})
+        nr_response = requests.post(endpoint,
+                                    headers=headers,
+                                    json={'query': disable_workflow_fmtd}).json()
+
+        try:
+            workflow_id = nr_response['data']['aiWorkflowsUpdateWorkflow']['workflow']['id']
+            logger.info(f'  Workflow ID {workflow_id} successfully disabled.')
+        except KeyError:
+            logger.warning(nr_response)
+            return 1
+
+    return 0

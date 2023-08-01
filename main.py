@@ -6,6 +6,7 @@ import logging
 import sys
 import requests
 import openpyxl
+from traceback import print_exc
 
 
 def initialize_logger():
@@ -20,7 +21,7 @@ def initialize_logger():
     return logger
 
 
-def get_nr_account_ids(logger):
+def get_nr_account_ids():
     nr_endpoint = 'https://api.newrelic.com/graphql'
     nr_headers = {
         'Content-Type': 'application/json',
@@ -69,43 +70,55 @@ def generate_report(accounts, logger):
     return
 
 
-def create_catchall_workflow(client_name, account_id, logger):
+def process_client(client_name, account_id, logger):
     endpoint = 'https://api.newrelic.com/graphql'
     headers = {
         'Content-Type': 'application/json',
         'API-Key': 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU',
     }
 
-    # Get all destination IDs from an account and find the ID for '2W Platform API'
-    destination_id = cc.get_destination_id(endpoint, headers, account_id, logger)
+    try:
+        # Get all destination IDs from an account and find the ID for '2W Platform API'
+        destination_id = cc.get_destination_id(endpoint, headers, account_id, logger)
 
-    # Create a new channel for '2W Platform API' destination
-    # channel_id = cc.create_channel(endpoint, headers, destination_id, account_id, logger)
+        # Create a new channel for '2W Platform API' destination
+        channel_id = cc.create_channel(endpoint, headers, destination_id, account_id, logger)
 
-    # Get all workflows that currently use the '2W Platform API' webhook except any with 'Platform' in the name;
-    #   return a list of policy IDs & list of workflow IDs
-    policy_ids_list, create_catchall, workflow_ids_list, workflows_to_check = cc.get_policy_ids(endpoint, headers,
-                                                                                                client_name, account_id,
-                                                                                                logger)
+        # Get all workflows that currently use the '2W Platform API' webhook except any with 'Platform' in the name;
+        #   return a list of policy IDs & list of workflow IDs
+        policy_ids_list, create_catchall, workflow_ids_list, workflows_to_check = cc.get_policy_ids(endpoint, headers,
+                                                                                                    client_name,
+                                                                                                    account_id,
+                                                                                                    logger)
 
-    # Create a new workflow called 'MCS Platform' & associate appropriate policies
-    # workflow_id = cc.create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
+        # Create a new workflow called 'MCS Platform' & associate appropriate policies
+        if create_catchall:
+            process_code = cc.create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
 
-    # TODO: disable appropriate policies
-    # pass in workflow IDs
+            if process_code < 1:
+                cc.disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger)
+                return workflows_to_check
+        else:
+            logger.info(f'\nA Platform catchall workflow already exists for {client_name}. Skipping workflow creation.')
+    except Exception:
+        logger.warning('There was an error:')
+        logger.warning(print_exc())
+        sys.exit(1)
 
-    return 0
 
-
-def do_the_things():
+def create_catchall_workflow():
     logger = initialize_logger()
+    logger.info('Starting the Platform catchall workflow creation process.\n')
+
+    manual_workflow_checks = []
 
     # Get list of all New Relic account numbers
-    accounts = get_nr_account_ids(logger)
+    accounts = get_nr_account_ids()
 
-    # generate an Excel report of all NR workflows, if needed
+    # Generate an Excel report of all NR workflows, if needed
     # generate_report(accounts, logger)
 
+    # For testing purposes only
     # 3720977 2W-MCS-Tooling-Test
     # Test policy: 4569885
     # 2621186 2W-MCS-2ndWatch
@@ -113,7 +126,7 @@ def do_the_things():
     # 2W-MCS-Development, 2W-MCS-Internal-IT, 2W-MCS-Sandboxes, 2W-MCS-SiriusPoint-AWS, 2W-MCS-Tooling-Test,
     # 2W-MCS-Sysco-Azure, 2W-MCS-Sysco-GCP, 2W-MCS-AutoNation, 2nd Watch Partner, 2W-MCS-Cargill-IT,
     # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development, USPlateGlass
-    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3720977, 3563046, 3563050,
+    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3563046, 3563050,
                             2726097, 2563179, 2978097, 3589554, 2623152, 2824352, 2726096]
 
     accounts_list = accounts['data']['actor']['accounts']
@@ -121,14 +134,24 @@ def do_the_things():
     accounts_sorted = sorted(accounts_list, key=lambda x: x['name'])
     # print(accounts_sorted)
 
+    # TODO: comment out and re-add account number to excluded list after testing (5th position)
+    accounts_sorted = [{"id": 3720977, "name": "2W-MCS-Tooling-Test"}]
+
     for account in accounts_sorted:
         account_id = account['id']
         client_name = account['name']
         if account_id not in account_exclude_list:
-            logger.info(f'Processing {client_name} in NR account {account_id}...')
-            process_result = create_catchall_workflow(client_name, account_id, logger)
+            logger.info(f'-----\nProcessing {client_name} in NR account {account_id}...\n-----\n')
+            workflows_to_check = process_client(client_name, account_id, logger)
+            if workflows_to_check:
+                for workflow in workflows_to_check:
+                    manual_workflow_checks.append(workflow)
         else:
             logger.info(f'{client_name} in excluded accounts list; skipping account.\n')
 
+    logger.info('\nPlatform workflow process complete for all accounts.\nManually check the following workflows:')
+    for manual_workflow in manual_workflow_checks:
+        logger.info(f'   {manual_workflow}')
 
-do_the_things()
+
+create_catchall_workflow()
