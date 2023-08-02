@@ -283,6 +283,8 @@ def create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, 
 
 def disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger):
     logger.info(f'\nDisabling {len(workflow_ids_list)} existing workflows...')
+    workflows_not_disabled = []
+
     nrql_disable_workflow = Template("""
         mutation {
           aiWorkflowsUpdateWorkflow(
@@ -308,6 +310,7 @@ def disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger):
             logger.info(f'  Workflow ID {workflow_id} successfully disabled.')
         except KeyError:
             logger.warning(nr_response)
-            return 1
+            workflows_not_disabled.append(workflow_id)
+            continue
 
-    return 0
+    return workflows_not_disabled

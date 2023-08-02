@@ -77,7 +77,10 @@ def process_client(client_name, account_id, logger):
         'API-Key': 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU',
     }
 
+    workflows_not_disabled = []
+
     try:
+
         # Get all destination IDs from an account and find the ID for '2W Platform API'
         destination_id = cc.get_destination_id(endpoint, headers, account_id, logger)
 
@@ -94,12 +97,13 @@ def process_client(client_name, account_id, logger):
         # Create a new workflow called 'MCS Platform' & associate appropriate policies
         if create_catchall:
             process_code = cc.create_workflow(endpoint, headers, account_id, channel_id, policy_ids_list, logger)
-
             if process_code < 1:
-                cc.disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger)
-                return workflows_to_check
+                workflows_not_disabled = cc.disable_workflows(endpoint, headers, account_id, workflow_ids_list, logger)
         else:
             logger.info(f'\nA Platform catchall workflow already exists for {client_name}. Skipping workflow creation.')
+
+        return workflows_to_check, workflows_not_disabled
+
     except Exception:
         logger.warning('There was an error:')
         logger.warning(print_exc())
@@ -111,6 +115,7 @@ def create_catchall_workflow():
     logger.info('Starting the Platform catchall workflow creation process.\n')
 
     manual_workflow_checks = []
+    manual_workflow_disables = []
 
     # Get list of all New Relic account numbers
     accounts = get_nr_account_ids()
@@ -126,32 +131,40 @@ def create_catchall_workflow():
     # 2W-MCS-Development, 2W-MCS-Internal-IT, 2W-MCS-Sandboxes, 2W-MCS-SiriusPoint-AWS, 2W-MCS-Tooling-Test,
     # 2W-MCS-Sysco-Azure, 2W-MCS-Sysco-GCP, 2W-MCS-AutoNation, 2nd Watch Partner, 2W-MCS-Cargill-IT,
     # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development, USPlateGlass
-    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3563046, 3563050,
+    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3720977, 3563046, 3563050,
                             2726097, 2563179, 2978097, 3589554, 2623152, 2824352, 2726096]
 
     accounts_list = accounts['data']['actor']['accounts']
-    # print(accounts_list)
     accounts_sorted = sorted(accounts_list, key=lambda x: x['name'])
-    # print(accounts_sorted)
 
-    # TODO: comment out and re-add account number to excluded list after testing (5th position)
-    accounts_sorted = [{"id": 3720977, "name": "2W-MCS-Tooling-Test"}]
+    # batch testing
+    # accounts_sorted = [{"id": 2709553, "name": "2W-MCS-BadgerMeter"},
+    #                    {"id": 2709554, "name": "2W-MCS-Cargill"},
+    #                    {"id": 3719690, "name": "2W-MCS-CKE"},
+    #                    {"id": 2622938, "name": "2W-MCS-Coaction"},
+    #                    {"id": 3084223, "name": "2W-MCS-CrateAndBarrel"}]
 
     for account in accounts_sorted:
         account_id = account['id']
         client_name = account['name']
         if account_id not in account_exclude_list:
             logger.info(f'-----\nProcessing {client_name} in NR account {account_id}...\n-----\n')
-            workflows_to_check = process_client(client_name, account_id, logger)
+            workflows_to_check, workflows_not_disabled = process_client(client_name, account_id, logger)
             if workflows_to_check:
                 for workflow in workflows_to_check:
                     manual_workflow_checks.append(workflow)
+            if workflows_not_disabled:
+                for wf_dis in workflows_not_disabled:
+                    manual_workflow_disables.append(wf_dis)
         else:
             logger.info(f'{client_name} in excluded accounts list; skipping account.\n')
 
     logger.info('\nPlatform workflow process complete for all accounts.\nManually check the following workflows:')
     for manual_workflow in manual_workflow_checks:
         logger.info(f'   {manual_workflow}')
+    logger.info('\nManually locate and disable the following workflows:')
+    for man_dis in manual_workflow_disables:
+        logger.info(f'   {man_dis}')
 
 
 create_catchall_workflow()
