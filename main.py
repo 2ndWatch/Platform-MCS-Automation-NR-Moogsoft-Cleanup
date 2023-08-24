@@ -118,7 +118,7 @@ def create_catchall_workflow():
     endpoint = 'https://api.newrelic.com/graphql'
     headers = {
         'Content-Type': 'application/json',
-        'API-Key': 'NRAK-7DVT82DILPFIAXSZZ6CLPKYB8YU',
+        'API-Key': '',
     }
 
     manual_workflow_checks = []
@@ -136,16 +136,16 @@ def create_catchall_workflow():
     # 2621186 2W-MCS-2ndWatch
 
     # 2W-MCS-Development, 2W-MCS-Internal-IT, 2W-MCS-Sandboxes, 2W-MCS-SiriusPoint-AWS, 2W-MCS-Tooling-Test,
-    # 2W-MCS-Sysco-Azure, 2W-MCS-Sysco-GCP, 2W-MCS-AutoNation, 2nd Watch Partner, 2W-MCS-Cargill-IT,
-    # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development, USPlateGlass
-    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3563046, 3563050,
-                            2726097, 2563179, 2978097, 3589554, 2623152, 2824352, 2726096]
+    # 2W-MCS-Sysco-Azure, 2W-MCS-Sysco-GCP, 2W-MCS-AutoNation, 2nd Watch Partner,
+    # 2W-MCS-PrudentPublishing (duplicate?), 2W-MCS-TitleMax, 2W-PRO-Development
+    account_exclude_list = [2804528, 3719648, 2631905, 3498029, 3720977, 3563046, 3563050,
+                            2726097, 2563179, 3589554, 2623152, 2824352]
 
     accounts_list = accounts['data']['actor']['accounts']
-    # accounts_sorted = sorted(accounts_list, key=lambda x: x['name'])
+    accounts_sorted = sorted(accounts_list, key=lambda x: x['name'])
 
     # batch testing
-    accounts_sorted = [{"id": 3720977, "name": "2W-MCS-Tooling-Test"}]
+    # accounts_sorted = [{"id": 3720977, "name": "2W-MCS-Tooling-Test"}]
 
     # {"id": 2709553, "name": "2W-MCS-BadgerMeter"},
     # {"id": 2709554, "name": "2W-MCS-Cargill"},
